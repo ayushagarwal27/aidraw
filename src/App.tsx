@@ -6,15 +6,31 @@ import {
 } from '@xyflow/react';
 import { toPng, toSvg } from 'html-to-image';
 import {
-  ChevronDown, Copy, Download, Eye, FileJson, FolderOpen, Hand, ImageDown, LayoutTemplate, Moon,
+  ChevronDown, Circle, Copy, Diamond, Download, Eraser, Eye, Frame, Square, StickyNote, FileJson, FolderOpen, Hand, ImageDown, LayoutTemplate, Moon,
   MousePointer2, PanelLeftClose, PanelLeftOpen, Pencil, PenLine, Redo2, Search, Sun, Trash2, Type,
   Undo2,
 } from 'lucide-react';
-import { LIBRARY, SWATCHES, makeNode, uid } from './library';
+import { LIBRARY, PROVIDERS, SWATCHES, makeNode, uid, type Provider } from './library';
 import { EditorCtx, edgeTypes, nodeTypes, strokePath } from './nodes';
 import { TEMPLATES, buildTemplate, styleEdge, type EdgeData } from './templates';
 
-type Tool = 'select' | 'hand' | 'pen' | 'text';
+type ShapeTool = 'rect' | 'diamond' | 'ellipse' | 'note' | 'frame';
+type Tool = 'select' | 'hand' | 'pen' | 'text' | 'eraser' | ShapeTool;
+const SHAPE_TOOLS: Tool[] = ['rect', 'diamond', 'ellipse', 'note', 'frame'];
+
+/** Toolbar order, with Excalidraw-style shortcuts: a number and a letter for each tool. */
+const TOOLS: { id: Tool; label: string; icon: typeof Hand; num?: string; key: string }[] = [
+  { id: 'hand', label: 'Hand (pan)', icon: Hand, key: 'h' },
+  { id: 'select', label: 'Select', icon: MousePointer2, num: '1', key: 'v' },
+  { id: 'rect', label: 'Rectangle', icon: Square, num: '2', key: 'r' },
+  { id: 'diamond', label: 'Diamond', icon: Diamond, num: '3', key: 'd' },
+  { id: 'ellipse', label: 'Ellipse', icon: Circle, num: '4', key: 'o' },
+  { id: 'pen', label: 'Draw', icon: Pencil, num: '5', key: 'p' },
+  { id: 'text', label: 'Text', icon: Type, num: '6', key: 't' },
+  { id: 'note', label: 'Sticky note', icon: StickyNote, num: '7', key: 'n' },
+  { id: 'frame', label: 'Group frame', icon: Frame, num: '8', key: 'f' },
+  { id: 'eraser', label: 'Eraser', icon: Eraser, num: '0', key: 'e' },
+];
 type Snap = { nodes: Node[]; edges: Edge[] };
 const STORAGE = 'aidraw:v1';
 
@@ -95,6 +111,47 @@ function PenLayer({ color, onDone }: { color: string; onDone: (n: Node) => void 
   );
 }
 
+/** Drag out a rectangle to place a shape, note or frame; a plain click drops it at its default size. */
+function ShapeLayer({ kind, onDone }: { kind: ShapeTool; onDone: (n: Node) => void }) {
+  const { screenToFlowPosition } = useReactFlow();
+  const [box, setBox] = useState<null | { x0: number; y0: number; x1: number; y1: number }>(null);
+  const ref = useRef<HTMLDivElement>(null);
+  const r = ref.current?.getBoundingClientRect();
+
+  return (
+    <div
+      ref={ref}
+      className="pen-layer"
+      onPointerDown={(e) => {
+        e.currentTarget.setPointerCapture(e.pointerId);
+        setBox({ x0: e.clientX, y0: e.clientY, x1: e.clientX, y1: e.clientY });
+      }}
+      onPointerMove={(e) => box && setBox({ ...box, x1: e.clientX, y1: e.clientY })}
+      onPointerUp={() => {
+        if (!box) return;
+        const a = screenToFlowPosition({ x: Math.min(box.x0, box.x1), y: Math.min(box.y0, box.y1) });
+        const b = screenToFlowPosition({ x: Math.max(box.x0, box.x1), y: Math.max(box.y0, box.y1) });
+        const n = makeNode(kind, a);
+        if (b.x - a.x > 16 && b.y - a.y > 16) {
+          n.width = b.x - a.x;
+          n.height = b.y - a.y;
+        } else {
+          n.position = { x: a.x - (n.width ?? 0) / 2, y: a.y - (n.height ?? 0) / 2 };
+        }
+        setBox(null);
+        onDone(n);
+      }}
+    >
+      {box && r && (
+        <div
+          className={`shape-preview ${kind}`}
+          style={{ left: Math.min(box.x0, box.x1) - r.left, top: Math.min(box.y0, box.y1) - r.top, width: Math.abs(box.x1 - box.x0), height: Math.abs(box.y1 - box.y0) }}
+        />
+      )}
+    </div>
+  );
+}
+
 function Editor() {
   const initial = useMemo(loadInitial, []);
   const [nodes, setNodes, onNodesChange] = useNodesState(initial.nodes);
@@ -112,6 +169,7 @@ function Editor() {
   const [query, setQuery] = useState('');
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [penColor, setPenColor] = useState('#dc2626');
+  const [cloud, setCloud] = useState<Provider>(() => (localStorage.getItem('aidraw:cloud') as Provider) || 'aws');
 
   // ---- undo / redo -------------------------------------------------------
   const live = useRef<Snap>({ nodes, edges });
@@ -145,6 +203,7 @@ function Editor() {
   }, [nodes, edges]);
   useEffect(() => localStorage.setItem('aidraw:theme', dark ? 'dark' : 'light'), [dark]);
   useEffect(() => localStorage.setItem('aidraw:sketch', sketch ? 'on' : 'off'), [sketch]);
+  useEffect(() => localStorage.setItem('aidraw:cloud', cloud), [cloud]);
 
   // ---- adding things -----------------------------------------------------
   const addNodes = useCallback((added: Node[], addedEdges: Edge[] = []) => {
@@ -219,7 +278,7 @@ function Editor() {
     const height = Math.ceil(b.height + pad * 2);
     const el = wrap.current!.querySelector('.react-flow__viewport') as HTMLElement;
     const url = await (fmt === 'png' ? toPng : toSvg)(el, {
-      backgroundColor: dark ? '#16181d' : '#ffffff',
+      backgroundColor: dark ? '#111111' : '#f4f4f0',
       width,
       height,
       pixelRatio: 2,
@@ -264,11 +323,8 @@ function Editor() {
       else if (mod && k === 'y') { e.preventDefault(); redo(); }
       else if (mod && k === 'd') { e.preventDefault(); duplicate(); }
       else if (mod && k === 'a') { e.preventDefault(); setNodes((ns) => ns.map((n) => ({ ...n, selected: true }))); }
-      else if (mod) return;
-      else if (k === 'v') setTool('select');
-      else if (k === 'h') setTool('hand');
-      else if (k === 'p') setTool('pen');
-      else if (k === 't') setTool('text');
+      else if (mod || e.altKey) return;
+      else if (TOOLS.some((t) => t.key === k || t.num === k)) setTool(TOOLS.find((t) => t.key === k || t.num === k)!.id);
       else if (k === 'escape') { setTool('select'); setFocus(false); setMenu(null); }
     };
     window.addEventListener('keydown', onKey);
@@ -277,15 +333,9 @@ function Editor() {
 
   // ---- palette -----------------------------------------------------------
   const q = query.trim().toLowerCase();
-  const library = LIBRARY.map((c) => ({ ...c, items: c.items.filter((i) => !q || i.label.toLowerCase().includes(q) || c.label.toLowerCase().includes(q)) }))
+  const library = LIBRARY.filter((c) => q || !c.provider || c.provider === cloud).map((c) => ({ ...c, items: c.items.filter((i) => !q || i.label.toLowerCase().includes(q) || c.label.toLowerCase().includes(q)) }))
     .filter((c) => c.items.length);
 
-  const tools: [Tool, string, typeof Hand][] = [
-    ['select', 'Select (V)', MousePointer2],
-    ['hand', 'Pan (H) — or hold Space', Hand],
-    ['pen', 'Draw (P)', Pencil],
-    ['text', 'Text (T)', Type],
-  ];
   const textSelected = selNodes.some((n) => n.type === 'text');
   const single = selNodes.length === 1 && selNodes[0].type === 'component' ? selNodes[0] : null;
   const e0 = (selEdges[0]?.data ?? {}) as EdgeData;
@@ -314,6 +364,9 @@ function Editor() {
             onNodeDragStart={snapshot}
             onSelectionDragStart={snapshot}
             onBeforeDelete={async () => { snapshot(); return true; }}
+            onNodeClick={(_, node) => tool === 'eraser' && rf.deleteElements({ nodes: [node] })}
+            onEdgeClick={(_, edge) => tool === 'eraser' && rf.deleteElements({ edges: [edge] })}
+            nodesDraggable={tool !== 'eraser'}
             onEdgeDoubleClick={(_, edge) => rf.updateEdgeData(edge.id, { editing: true })}
             onPaneClick={(e) => {
               setMenu(null);
@@ -340,6 +393,7 @@ function Editor() {
             <Background variant={BackgroundVariant.Dots} gap={22} size={1.5} />
             <Controls position="bottom-right" showInteractive={false} />
           </ReactFlow>
+          {SHAPE_TOOLS.includes(tool) && <ShapeLayer kind={tool as ShapeTool} onDone={(n) => { addNodes([n]); setTool('select'); }} />}
           {tool === 'pen' && <PenLayer color={penColor} onDone={(n) => { snapshot(); setNodes((ns) => [...ns, n]); }} />}
           {!nodes.length && <div className="empty">Drag a component from the left, or start from a template.</div>}
         </div>
@@ -357,15 +411,25 @@ function Editor() {
             </label>
             <div className="palette-scroll">
               {library.map((c) => {
-                const open = q ? true : !collapsed[c.id];
+                // Outside of search, the three providers share one "Cloud" section with tabs inside it.
+                const isCloud = !q && !!c.provider;
+                const key = isCloud ? 'cloud' : c.id;
+                const open = q ? true : !collapsed[key];
                 return (
-                  <section key={c.id}>
-                    <button className="cat" onClick={() => setCollapsed((s) => ({ ...s, [c.id]: !s[c.id] }))}>
+                  <section key={key}>
+                    <button className="cat" onClick={() => setCollapsed((s) => ({ ...s, [key]: !s[key] }))}>
                       <i style={{ background: c.color }} />
-                      {c.label}
+                      {isCloud ? 'Cloud' : c.label}
                       <span>{c.items.length}</span>
                       <ChevronDown size={14} className={open ? '' : 'closed'} />
                     </button>
+                    {open && isCloud && (
+                      <div className="seg cloud-tabs">
+                        {PROVIDERS.map(([id, label]) => (
+                          <button key={id} className={cloud === id ? 'active' : ''} onClick={() => setCloud(id)}>{label}</button>
+                        ))}
+                      </div>
+                    )}
                     {open && (
                       <div className="items">
                         {c.items.map((it) => (
@@ -396,8 +460,16 @@ function Editor() {
 
         {/* ---------- top centre: tools ---------- */}
         <div className="island toolbar ui">
-          {tools.map(([id, title, Icon]) => (
-            <button key={id} className={`icon-btn ${tool === id ? 'active' : ''}`} title={title} onClick={() => setTool(id)}><Icon size={18} /></button>
+          {TOOLS.map((t) => (
+            <button
+              key={t.id}
+              className={`icon-btn tool ${tool === t.id ? 'active' : ''}`}
+              title={`${t.label} — ${t.key.toUpperCase()}${t.num ? ` or ${t.num}` : ''}`}
+              onClick={() => setTool(t.id)}
+            >
+              <t.icon size={18} />
+              {t.num && <kbd>{t.num}</kbd>}
+            </button>
           ))}
           {tool === 'pen' && (
             <>
@@ -527,7 +599,7 @@ function Editor() {
           </aside>
         )}
 
-        <div className="hint ui">Double-click to rename · drag from a dot to connect · scroll to pan · ⌘/Ctrl + scroll to zoom</div>
+        <div className="hint ui">Double-click to rename · drag from a dot to connect · press 1–8 or a letter to switch tools · scroll to pan</div>
         {focus && <button className="island exit-focus" onClick={() => setFocus(false)}>Exit presentation · Esc</button>}
         <input ref={fileInput} type="file" accept=".json,application/json" hidden onChange={(e) => { importJson(e.target.files?.[0]); e.target.value = ''; }} />
       </div>

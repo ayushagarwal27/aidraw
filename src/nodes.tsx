@@ -4,7 +4,7 @@ import {
   getStraightPath, useReactFlow, type EdgeProps, type NodeProps,
 } from '@xyflow/react';
 import { iconFor } from './library';
-import { EDGE_COLOR, type EdgeData } from './templates';
+import { type EdgeData } from './templates';
 
 /** Lets nodes record an undo step before they change themselves. */
 export const EditorCtx = createContext<{ snapshot: () => void }>({ snapshot() {} });
@@ -158,7 +158,7 @@ function FlowEdge({ id, sourceX, sourceY, targetX, targetY, sourcePosition, targ
   const args = { sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition };
   const [path, lx, ly] =
     d.path === 'straight' ? getStraightPath(args) : d.path === 'curved' ? getBezierPath(args) : getSmoothStepPath({ ...args, borderRadius: 14 });
-  const color = d.color ?? EDGE_COLOR;
+  const color = d.color ?? 'var(--edge)';
 
   return (
     <>
@@ -168,7 +168,7 @@ function FlowEdge({ id, sourceX, sourceY, targetX, targetY, sourcePosition, targ
         markerEnd={markerEnd}
         markerStart={markerStart}
         interactionWidth={24}
-        style={{ stroke: color, strokeWidth: selected ? 3 : 2, strokeDasharray: d.line === 'dashed' ? '7 6' : undefined }}
+        style={{ stroke: color, strokeWidth: selected ? 3.5 : 2.25, strokeDasharray: d.line === 'dashed' ? '7 6' : undefined }}
       />
       {(d.label || d.editing) && (
         <EdgeLabelRenderer>
